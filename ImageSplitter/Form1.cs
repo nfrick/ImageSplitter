@@ -1,5 +1,8 @@
 ﻿using Photoshop;
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -10,12 +13,7 @@ using System.Windows.Forms;
 namespace ImageSplitter {
     public partial class Form1 : Form {
         private ApplicationClass app;
-        private string _sourceFolder;
-        private string _targetFolder;
-        private int _imagesPerRow = 2;
-        private int _imagesPerColumn = 2;
-        private int _padRow;
-        private int _padCol;
+        private OutPutManager _OutMgr;
         private int _cellWidth; // The width, in px, of your image cell
         private int _cellHeight; // The height, in px, of your image cell
         private int _xOffset; // The space, in px, between each cell in a row
@@ -26,16 +24,33 @@ namespace ImageSplitter {
             InitializeComponent();
         }
 
+        private OutPutManager SetOutPutManager() {
+            return new OutPutManager(textBoxSourceFolder.Text, textBoxTargetFolder.Text,
+                (int)nupLinhas.Value, (int)nupColunas.Value,
+                trackBarQuality.Value);
+        }
+
         private void btnStart_Click(object sender, EventArgs e) {
             // Set cursor as hourglass
             Cursor.Current = Cursors.WaitCursor;
 
+            _OutMgr = SetOutPutManager();
+            if (radioButtonPhotoshop.Checked)
+                ProcessPhotoshop();
+            else
+                ProcessCode();
+
+            // Set cursor as default arrow
+            Cursor.Current = Cursors.Default;
+        }
+
+        private void ProcessPhotoshop() {
             app = new ApplicationClass { Visible = false };
 
             _jpegSaveOptions = new JPEGSaveOptions {
                 FormatOptions = PsFormatOptionsType.psStandardBaseline,
                 Matte = PsMatteType.psNoMatte,
-                Quality = 12
+                Quality = _OutMgr.Quality
             };
 
             // Store the current rulerUnits for later. We're going to change
@@ -47,24 +62,13 @@ namespace ImageSplitter {
             // Set rulerUnits to pixels
             app.Preferences.RulerUnits = PsUnits.psPixels;
 
-            _sourceFolder = textBoxSourceFolder.Text;
-            _targetFolder = textBoxTargetFolder.Text;
-
-            // Test outFolder, create if needed
-            Directory.CreateDirectory(_targetFolder);
-
-            var allFiles = Directory.GetFiles(_sourceFolder, "*.jpg", SearchOption.AllDirectories);
-
-            foreach (var file in allFiles) {
+            foreach (var file in _OutMgr.GetAllFiles()) {
                 SplitPicture(file);
             }
 
             // Reset the ruler units
             app.Preferences.RulerUnits = myRulerUnits;
             app.Quit();
-
-            // Set cursor as default arrow
-            Cursor.Current = Cursors.Default;
         }
 
         private void SplitPicture(string fileName) {
@@ -74,17 +78,11 @@ namespace ImageSplitter {
             var imageWidth = (int)app.ActiveDocument.Width;
             var imageHeight = (int)app.ActiveDocument.Height;
 
-            _imagesPerRow = (int)nupColunas.Value;
-            _imagesPerColumn = (int)nupLinhas.Value;
-
-            _padRow = 1 + (int)Math.Log10(_imagesPerColumn);
-            _padCol = 1 + (int)Math.Log10(_imagesPerRow);
-
             _xOffset = (int)nupDistX.Value;
             _yOffset = (int)nupDistY.Value;
 
-            _cellWidth = imageWidth / _imagesPerRow;
-            _cellHeight = imageHeight / _imagesPerColumn;
+            _cellWidth = imageWidth / _OutMgr.Cols;
+            _cellHeight = imageHeight / _OutMgr.Rows;
 
             // Find the "Background"
             var layerRef = doc.ArtLayers.Cast<ArtLayer>().FirstOrDefault(layer => doc.ArtLayers.Count == 1 || layer.Name == "Background");
@@ -136,20 +134,9 @@ namespace ImageSplitter {
             return (int)Math.Floor(((decimal)imageHeight + _yOffset) / (cellHeight + _yOffset));
         }
 
-        // Pad the cell x and y numbers for proper sorting
-        private static string Pad(int num, int size) {
-            var pattern = new string('0', size);
-            return num.ToString(pattern);
-        }
-
         // Actually save, or really "Save For Web" the cell
         private void SaveCell(Document doc, int x, int y) {
-            var dname = doc.FullName.Substring(0, doc.FullName.Length - 4);
-            var nname = dname.Replace(_sourceFolder, _targetFolder) +
-                " " + Pad((x + 1), _padRow) + "_" + Pad((y + 1), _padCol) + ".jpg";
-            var fInfo = new FileInfo(nname);
-            var folderName = fInfo.Directory.FullName;
-            Directory.CreateDirectory(folderName);
+            var nname = _OutMgr.GetFileName(doc.FullName, x, y);
             doc.SaveAs(nname, _jpegSaveOptions, true, PsExtensionType.psLowercase);
         }
 
@@ -169,6 +156,30 @@ namespace ImageSplitter {
             buttonProcessar.Enabled =
                 !string.IsNullOrEmpty(textBoxSourceFolder.Text) &&
                 !string.IsNullOrEmpty(textBoxTargetFolder.Text);
+        }
+
+        private void ProcessCode() {
+            foreach (var file in _OutMgr.GetAllFiles()) {
+                var it = new ImageTile(file, _OutMgr);
+                it.GenerateTiles();
+            }
+        }
+
+        private void radioButtonMethod_CheckedChanged(object sender, EventArgs e) {
+            var rbtn = sender as RadioButton;
+            if (rbtn.Name == @"radioButtonPhotoshop" && rbtn.Checked) {
+                trackBarQuality.Value = (int)Math.Ceiling((double)trackBarQuality.Value * 0.12);
+                trackBarQuality.Maximum = 12;
+            }
+            else if (rbtn.Name == @"radioButtonCode" && rbtn.Checked) {
+                trackBarQuality.Maximum = 100;
+                trackBarQuality.Value = (int)Math.Ceiling((double)trackBarQuality.Value / 0.12);
+            }
+
+        }
+
+        private void trackBarQuality_ValueChanged(object sender, EventArgs e) {
+            groupBox4.Text = $@"Qualidade: {trackBarQuality.Value}";
         }
     }
 }
